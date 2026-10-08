@@ -27,6 +27,8 @@ _AD_HOC_SCRIPT_NAME_PREFIXES = ("hermes-verify-", "hermes-ad-hoc-")
 _VERIFY_SCHEMA_VERSION = 1
 
 _INTERPRETERS = {"python", "python3", "py", "node", "bash", "sh", "ruby", "perl"}
+# Python-family interpreter basenames, for canonical-recipe normalization only.
+_PYTHON_INTERPRETER_NAME_RE = re.compile(r"^python(?:\d+(?:\.\d+)*)?$")
 # Windows spells the same interpreters `python.exe` / `py.exe` (a venv's absolute Scripts path).
 _WINDOWS_EXE_SUFFIX_RE = re.compile(r"\.(?:exe|bat|cmd)$", re.IGNORECASE)
 # The same interpreter is reached as `python3`, `python3.12`, `/usr/bin/python3.12`, or
@@ -269,7 +271,7 @@ def _find_canonical_match(command: str, canonical_commands: list[str], exit_code
         if not needle:
             continue
         for index, segment in enumerate(segments):
-            candidate_tokens = _strip_command_prefix(segment.tokens)
+            candidate_tokens = _strip_interpreter_prefix(_strip_command_prefix(segment.tokens))
             for candidate in _equivalent_needles(needle):
                 if candidate_tokens[:len(candidate)] == candidate and _exit_status_is_attributable(segments, index, exit_code):
                     return canonical, candidate_tokens[len(candidate):]
@@ -321,6 +323,32 @@ def _is_interpreter_token(token: str) -> bool:
     # Basename by hand: on POSIX ``Path`` treats a Windows backslash path as one component.
     name = token.replace("\\", "/").rsplit("/", 1)[-1]
     return bool(_INTERPRETER_NAME_RE.match(_WINDOWS_EXE_SUFFIX_RE.sub("", name)))
+
+
+def _is_python_interpreter_token(token: str) -> bool:
+    """Python-family interpreter name, by basename and any path prefix.
+
+    Narrower than :func:`_is_interpreter_token` on purpose: the canonical matcher compares
+    against detected project recipes (Python-family commands), so only a Python invoker is
+    normalized -- stripping arbitrary paths or wrappers would let unrelated commands match.
+    """
+    name = token.replace("\\", "/").rsplit("/", 1)[-1]
+    return bool(_PYTHON_INTERPRETER_NAME_RE.match(_WINDOWS_EXE_SUFFIX_RE.sub("", name)))
+
+
+def _strip_interpreter_prefix(tokens: list[str]) -> list[str]:
+    """Drop a leading Python interpreter and its ``-m`` flag.
+
+    ``/abs/venv/bin/python -m pytest`` is the same verification as ``python3 -m pytest``, but
+    the matcher compared tokens literally, so the spelling decided whether evidence was
+    recorded at all -- and the absolute form recorded nothing.
+    """
+    rest = list(tokens)
+    if rest and _is_python_interpreter_token(rest[0]):
+        rest = rest[1:]
+        if rest[:1] == ["-m"]:
+            rest = rest[1:]
+    return rest
 
 
 def _ad_hoc_script_args(tokens: list[str], root: str | Path | None) -> Optional[list[str]]:

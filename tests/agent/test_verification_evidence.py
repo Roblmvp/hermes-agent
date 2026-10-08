@@ -480,3 +480,46 @@ def test_windows_backslash_ad_hoc_script_path_is_matched(tmp_path, monkeypatch):
     assert result is not None, (
         "Windows backslash path should be matched via posix=False fallback"
     )
+
+
+RECIPE = ["scripts/run_tests.sh", "npm run check", "pytest"]
+
+
+@pytest.mark.parametrize(
+    "invocation",
+    [
+        "pytest -q",
+        "python3 -m pytest -q",
+        "/opt/venv/bin/python -m pytest -q",
+        "/opt/venv/bin/python3.12 -m pytest -q",
+    ],
+)
+def test_python_invoker_spelling_does_not_decide_recipe_recognition(invocation):
+    """Every Python spelling of the same verification must recognize the ``pytest`` recipe.
+
+    An absolute invoker previously matched nothing at all, and a detected recipe suppresses the
+    ad-hoc fallback, so such a run recorded no evidence and the workspace stayed unverified.
+    """
+    from agent.verification_evidence import _find_canonical_match
+
+    assert _find_canonical_match(invocation, RECIPE, 0) == ("pytest", ["-q"])
+
+
+def test_absolute_python_invoker_matches_a_script_recipe():
+    """Normalization reaches a script recipe invoked through an interpreter."""
+    from agent.verification_evidence import _find_canonical_match
+
+    match = _find_canonical_match("/opt/venv/bin/python scripts/run_tests.sh", RECIPE, 0)
+
+    assert match == ("scripts/run_tests.sh", [])
+
+
+@pytest.mark.parametrize(
+    "invocation",
+    ["echo pytest", "/usr/bin/node -m pytest -q", "/opt/python-tools/bin/runner -q"],
+)
+def test_non_python_invocation_matches_no_recipe(invocation):
+    """Python-family and basename-exact only: a wrapper or another interpreter matches nothing."""
+    from agent.verification_evidence import _find_canonical_match
+
+    assert _find_canonical_match(invocation, RECIPE, 0) is None

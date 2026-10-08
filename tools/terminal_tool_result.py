@@ -15,6 +15,10 @@ from typing import Any, Optional
 
 logger = logging.getLogger("tools.terminal_tool")
 
+# Report the verification-recorder failure at most once per process: a per-call warning would
+# flood the log, and the first occurrence is the one that explains an unverified workspace.
+_verification_failure_logged = False
+
 
 @contextmanager
 def _quiet(label: str):
@@ -194,12 +198,28 @@ def _redact_spill_file(path, total_chars, command) -> list[tuple[str, Any]]:
 
 
 def _verification_evidence(command, cwd, session_id, returncode, output) -> Optional[dict]:
-    with _quiet("verification evidence recording"):
+    """Record verification evidence; a recorder bug must never break the tool result.
+
+    This used to be wrapped in ``_quiet``, which swallowed failures at DEBUG -- hiding the one
+    signal that explains a workspace which can never be marked verified. The failure is still
+    swallowed (the tool result path must not break), but reported once per process at WARNING,
+    naming the exception type and a short message only: never the command or its output, which
+    may carry secrets.
+    """
+    global _verification_failure_logged
+    try:
         from agent.verification_evidence import record_terminal_result
         evidence = record_terminal_result(command=command, cwd=cwd, session_id=session_id,
                                           exit_code=returncode, output=output)
-        if evidence:
-            return {k: evidence.get(k) for k in ("status", "kind", "scope", "canonical_command")}
+    except Exception as exc:  # noqa: BLE001 -- best-effort path, deliberately not fatal
+        if not _verification_failure_logged:
+            _verification_failure_logged = True
+            logger.warning(
+                "verification evidence recording failed (logged once per process): %s: %s",
+                type(exc).__name__, " ".join(str(exc).split())[:200])
+        return None
+    if evidence:
+        return {k: evidence.get(k) for k in ("status", "kind", "scope", "canonical_command")}
     return None
 
 
